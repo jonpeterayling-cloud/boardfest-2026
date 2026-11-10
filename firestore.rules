@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // These are the only 16 self-service job places.
+    // Jonny and Ben's two preassigned places are fixed in the website.
+    function validSlot(slotId) {
+      return slotId in [
+        'thu_wash_1', 'thu_wash_2',
+        'fri_lunch_prep_1', 'fri_lunch_wash_1',
+        'fri_supper_prep_1', 'fri_supper_wash_1', 'fri_supper_wash_2',
+        'sat_lunch_prep_1', 'sat_lunch_prep_2', 'sat_lunch_wash_1', 'sat_lunch_wash_2',
+        'sat_supper_prep_2', 'sat_supper_prep_3',
+        'sat_supper_wash_1', 'sat_supper_wash_2', 'sat_supper_wash_3'
+      ];
+    }
+    function validMember(memberId) {
+      return memberId in [
+        'alex', 'andy', 'baxter', 'chill', 'gav', 'gower', 'issac',
+        'jack', 'matt-m', 'matt-r', 'mike', 'morf', 'nick', 'rob', 'steve', 'sunny'
+      ];
+    }
+    function signedIn() { return request.auth != null; }
+    function validSlotData() {
+      return request.resource.data.keys().hasAll(['memberId','uid','claimedAt'])
+        && request.resource.data.keys().hasOnly(['memberId','uid','claimedAt'])
+        && validMember(request.resource.data.memberId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.claimedAt == request.time;
+    }
+    function validMemberData() {
+      return request.resource.data.keys().hasAll(['slotId','uid','claimedAt'])
+        && request.resource.data.keys().hasOnly(['slotId','uid','claimedAt'])
+        && validSlot(request.resource.data.slotId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.claimedAt == request.time;
+    }
+
+    match /boards/{boardId} {
+      // Board parent has no readable or writable documents.
+      allow read, write: if false;
+
+      match /slots/{slotId} {
+        allow read: if boardId == 'boardfest2026' && signedIn();
+        // The matching member record MUST be created in the same transaction.
+        allow create: if boardId == 'boardfest2026' && signedIn() && validSlot(slotId)
+          && validSlotData()
+          && getAfter(/databases/$(database)/documents/boards/$(boardId)/members/$(request.resource.data.memberId)).data.slotId == slotId
+          && getAfter(/databases/$(database)/documents/boards/$(boardId)/members/$(request.resource.data.memberId)).data.uid == request.auth.uid;
+        allow delete: if boardId == 'boardfest2026' && signedIn()
+          && resource.data.uid == request.auth.uid
+          && !existsAfter(/databases/$(database)/documents/boards/$(boardId)/members/$(resource.data.memberId));
+        allow update: if false;
+      }
+
+      match /members/{memberId} {
+        allow get: if boardId == 'boardfest2026' && signedIn();
+        allow list: if false;
+        // One member document per name means one job per attendee.
+        // The matching slot record MUST be created in the same transaction.
+        allow create: if boardId == 'boardfest2026' && signedIn() && validMember(memberId)
+          && validMemberData()
+          && getAfter(/databases/$(database)/documents/boards/$(boardId)/slots/$(request.resource.data.slotId)).data.memberId == memberId
+          && getAfter(/databases/$(database)/documents/boards/$(boardId)/slots/$(request.resource.data.slotId)).data.uid == request.auth.uid;
+        allow delete: if boardId == 'boardfest2026' && signedIn()
+          && resource.data.uid == request.auth.uid
+          && !existsAfter(/databases/$(database)/documents/boards/$(boardId)/slots/$(resource.data.slotId));
+        allow update: if false;
+      }
+    }
+    // Deny all other collections and documents.
+    match /{document=**} { allow read, write: if false; }
+  }
+}
